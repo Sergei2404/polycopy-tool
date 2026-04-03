@@ -1,0 +1,19 @@
+{
+  "_comment": "Bootstrap state for polycopy-tool. Place this file in the IronClaw workspace root. Fill in credentials before first run. The agent manages this object in memory after the first call.",
+  "config": {
+    "watch_wallets": [],
+    "max_bid_usdc": 1.0,
+    "neg_risk_token_ids": [],
+    "clob_base": "https://clob.polymarket.com"
+  },
+  "credentials": {
+    "_comment": "Run the native bot once to derive api_key/secret/passphrase via L1 EIP-712 auth. See bot/src/clob/auth.rs.",
+    "api_key":         "PASTE_API_KEY_HERE",
+    "secret":          "PASTE_BASE64URL_SECRET_HERE",
+    "passphrase":      "PASTE_PASSPHRASE_HERE",
+    "private_key_hex": "0xYOUR_PRIVATE_KEY_HEX",
+    "maker_address":   "0xYOUR_WALLET_ADDRESS"
+  },
+  "last_synced_ms": 0,
+  "copied_orders": []
+}

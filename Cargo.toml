@@ -1,0 +1,39 @@
+[package]
+name = "polycopy-tool"
+version = "0.1.0"
+edition = "2021"
+description = "Polymarket copy-trade tool for the IronClaw Claude Agent SDK (WASM component)"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# WIT interface bindings
+wit-bindgen = "=0.36"
+
+# Serialization
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# L2 HMAC-SHA256 auth (lifted from bot/src/clob/auth.rs)
+hmac   = { version = "0.12", default-features = false }
+sha2   = { version = "0.10", default-features = false }
+
+# EIP-712 order signing
+sha3   = { version = "0.10", default-features = false }           # keccak256
+k256   = { version = "0.13", default-features = false, features = ["ecdsa"] }
+
+# Base64url encode/decode (for HMAC secret key and signature)
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+# Hex encode/decode (private key, addresses, signature)
+hex    = { version = "0.4",  default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level     = "s"
+lto           = true
+strip         = true
+codegen-units = 1
+
+[workspace]

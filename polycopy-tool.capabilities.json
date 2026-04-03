@@ -1,0 +1,28 @@
+{
+  "version": "0.1.0",
+  "wit_version": "0.3.0",
+  "description": "Polymarket copy-trade tool. Scans watched wallets for new trades and copies them as FOK market orders.",
+
+  "http": {
+    "allowlist": [
+      {
+        "host": "clob.polymarket.com",
+        "path_prefix": "/",
+        "methods": ["GET", "POST"]
+      }
+    ],
+    "rate_limit": {
+      "requests_per_minute": 30,
+      "requests_per_hour": 300
+    },
+    "timeout_secs": 15
+  },
+
+  "workspace": {
+    "readable_paths": ["polycopy-state.json"]
+  },
+
+  "secrets": {
+    "allowed_names": []
+  }
+}
