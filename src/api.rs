@@ -5,15 +5,26 @@ pub const DEFAULT_CLOB_BASE: &str = "https://clob.polymarket.com";
 
 /// Fetch trades made by `wallet` (as maker) since `after_ms`.
 ///
-/// Uses the public `GET /trades?maker_address={addr}&after={unix_seconds}` endpoint.
-pub fn fetch_trades(wallet: &str, after_ms: u64, clob_base: &str) -> Result<Vec<Trade>, String> {
+/// Uses `GET /trades?maker_address={addr}&after={unix_seconds}`.
+/// If `api_key` is provided it is sent as the `POLY_API_KEY` header.
+pub fn fetch_trades(
+    wallet: &str,
+    after_ms: u64,
+    clob_base: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<Trade>, String> {
     let after_s = after_ms / 1000;
     let path = format!("/trades?maker_address={wallet}&after={after_s}");
     let url = format!("{clob_base}{path}");
 
     host::log(host::LogLevel::Debug, &format!("GET {url}"));
 
-    let resp = host::http_request("GET", &url, "{}", None, Some(15_000))
+    let headers = match api_key {
+        Some(key) => format!(r#"{{"POLY_API_KEY":"{key}"}}"#),
+        None => "{}".to_string(),
+    };
+
+    let resp = host::http_request("GET", &url, &headers, None, Some(15_000))
         .map_err(|e| format!("GET {path}: {e}"))?;
 
     if resp.status < 200 || resp.status >= 300 {

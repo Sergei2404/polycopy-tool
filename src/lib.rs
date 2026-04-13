@@ -1,8 +1,7 @@
 mod api;
-mod state;
 mod types;
 
-use types::{BotAction, ToolOutput};
+use types::BotAction;
 
 wit_bindgen::generate!({
     world: "sandboxed-tool",
@@ -13,7 +12,7 @@ struct PolycopyTool;
 
 impl exports::near::agent::tool::Guest for PolycopyTool {
     fn execute(req: exports::near::agent::tool::Request) -> exports::near::agent::tool::Response {
-        match execute_inner(&req.params, req.context.as_deref()) {
+        match execute_inner(&req.params) {
             Ok(output) => exports::near::agent::tool::Response {
                 output: Some(output),
                 error: None,
@@ -32,16 +31,28 @@ impl exports::near::agent::tool::Guest for PolycopyTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["scan", "add_wallet", "remove_wallet"],
-                    "description": "Operation to perform"
+                    "enum": ["scan", "add_wallet", "remove_wallet", "version"]
+                },
+                "last_synced_ms": {
+                    "type": "integer",
+                    "description": "Timestamp (ms) of the previous scan. Required for: scan"
+                },
+                "watch_wallets": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Current wallet list. Required for all actions"
                 },
                 "wallet": {
                     "type": "string",
                     "description": "Ethereum address (0x-prefixed). Required for: add_wallet, remove_wallet"
                 },
+                "api_key": {
+                    "type": "string",
+                    "description": "Polymarket API key (POLY_API_KEY). Optional for public endpoints, required for private ones"
+                },
                 "clob_base": {
                     "type": "string",
-                    "description": "Override CLOB base URL (optional)"
+                    "description": "Override CLOB base URL (optional, scan only)"
                 }
             }
         }"#
@@ -49,89 +60,66 @@ impl exports::near::agent::tool::Guest for PolycopyTool {
     }
 
     fn description() -> String {
-        "Polymarket trade scanner. Tracks wallets and returns new trades since last scan. \
-         Watched wallets and timestamp are returned in `context` and must be passed back on \
-         every subsequent call. First scan only records the timestamp; picks appear from the \
-         second call onward."
+        "Stateless Polymarket trade scanner. \
+         Pass last_synced_ms and watch_wallets on every call — the tool has no storage. \
+         scan returns new trades as JSONL plus an updated last_synced_ms (unchanged on error). \
+         add_wallet / remove_wallet return the updated watch_wallets list."
             .to_string()
     }
 }
 
-fn execute_inner(params: &str, context: Option<&str>) -> Result<String, String> {
+fn execute_inner(params: &str) -> Result<String, String> {
     let action: BotAction =
         serde_json::from_str(params).map_err(|e| format!("invalid params: {e}"))?;
 
-    let mut ctx = state::load(context)?;
-
-    let result_json = match action {
-        BotAction::Scan { clob_base } => {
+    match action {
+        BotAction::Scan { last_synced_ms, watch_wallets, api_key, clob_base } => {
             let base = clob_base.as_deref().unwrap_or(api::DEFAULT_CLOB_BASE);
+            let key = api_key.as_deref();
+            let mut picks = vec![];
 
-            // First run: no prior timestamp — record now and return no picks.
-            if ctx.last_synced_ms == 0 {
-                ctx.last_synced_ms = near::agent::host::now_millis();
-                serde_json::to_string(&ToolOutput {
-                    result: serde_json::json!({ "new_picks": [], "first_run": true }),
-                    context: ctx,
-                })
-                .map_err(|e| e.to_string())?
-            } else {
-                let after_ms = ctx.last_synced_ms;
-                let wallets: Vec<String> = ctx.watch_wallets.clone();
-                let mut new_picks = vec![];
-
-                for wallet in &wallets {
-                    match api::fetch_trades(wallet, after_ms, base) {
-                        Ok(trades) => new_picks.extend(trades),
-                        Err(e) => near::agent::host::log(
-                            near::agent::host::LogLevel::Error,
-                            &format!("fetch_trades {wallet}: {e}"),
-                        ),
-                    }
-                }
-
-                ctx.last_synced_ms = near::agent::host::now_millis();
-
-                serde_json::to_string(&ToolOutput {
-                    result: serde_json::json!({ "new_picks": new_picks }),
-                    context: ctx,
-                })
-                .map_err(|e| e.to_string())?
+            for wallet in &watch_wallets {
+                let trades = api::fetch_trades(wallet, last_synced_ms, base, key)
+                    .map_err(|e| format!("fetch_trades {wallet}: {e}"))?;
+                picks.extend(trades);
             }
+
+            let new_ts = near::agent::host::now_millis();
+
+            let picks_jsonl = picks
+                .iter()
+                .filter_map(|t| serde_json::to_string(t).ok())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            serde_json::to_string(&serde_json::json!({
+                "last_synced_ms": new_ts,
+                "picks": picks_jsonl,
+            }))
+            .map_err(|e| e.to_string())
         }
 
-        BotAction::AddWallet { wallet } => {
+        BotAction::AddWallet { mut watch_wallets, wallet } => {
             let wallet = wallet.to_lowercase();
-            if !ctx.watch_wallets.contains(&wallet) {
-                ctx.watch_wallets.push(wallet.clone());
-                near::agent::host::log(
-                    near::agent::host::LogLevel::Info,
-                    &format!("added wallet {wallet}"),
-                );
+            if !watch_wallets.contains(&wallet) {
+                watch_wallets.push(wallet);
             }
-            serde_json::to_string(&ToolOutput {
-                result: serde_json::json!({ "watch_wallets": ctx.watch_wallets }),
-                context: ctx,
-            })
-            .map_err(|e| e.to_string())?
+            serde_json::to_string(&serde_json::json!({ "watch_wallets": watch_wallets }))
+                .map_err(|e| e.to_string())
         }
 
-        BotAction::RemoveWallet { wallet } => {
+        BotAction::RemoveWallet { mut watch_wallets, wallet } => {
             let wallet = wallet.to_lowercase();
-            ctx.watch_wallets.retain(|w| w != &wallet);
-            near::agent::host::log(
-                near::agent::host::LogLevel::Info,
-                &format!("removed wallet {wallet}"),
-            );
-            serde_json::to_string(&ToolOutput {
-                result: serde_json::json!({ "watch_wallets": ctx.watch_wallets }),
-                context: ctx,
-            })
-            .map_err(|e| e.to_string())?
+            watch_wallets.retain(|w| w != &wallet);
+            serde_json::to_string(&serde_json::json!({ "watch_wallets": watch_wallets }))
+                .map_err(|e| e.to_string())
         }
-    };
 
-    Ok(result_json)
+        BotAction::Version => Ok(serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+        })
+        .to_string()),
+    }
 }
 
 export!(PolycopyTool);
